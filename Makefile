@@ -218,6 +218,11 @@ SYSLINUX_CFG	:= $(ISOLINUX)/syslinux.cfg
 SYSLINUX_SERIAL	?=
 SYSLINUX_TIMEOUT ?= 20
 SYSLINUX_PROMPT ?= 1
+EFI_DIR		:= EFI/Boot
+GUMMIBOOT_EFI	:= $(ISO_DIR)/$(EFI_DIR)/bootx64.efi
+GUMMIBOOT_CFG	:= $(ISO_DIR)/loader/loader.conf
+GUMMIBOOT_ENTRY_DIR := $(ISO_DIR)/loader/entries
+GUMMIBOOT_ENTRIES := $(addsuffix .conf,$(addprefix $(GUMMIBOOT_ENTRY_DIR)/,$(KERNEL_FLAVOR)))
 
 
 $(ISOLINUX_C32):
@@ -233,6 +238,14 @@ $(ISOLINUX_BIN):
 	@mkdir -p $(dir $(ISOLINUX_BIN))
 	@if ! $(APK_FETCH_STDOUT) syslinux \
 		| $(TAR) -O -zx usr/share/syslinux/isolinux.bin > $@; then \
+		rm -f $@ && exit 1;\
+	fi
+
+$(GUMMIBOOT_EFI):
+	@echo "==> iso: install gummiboot"
+	@mkdir -p $(dir $@)
+	@if ! $(APK_FETCH_STDOUT) gummiboot \
+		| $(TAR) -O -zx usr/lib/gummiboot/gummibootx64.efi > $@; then \
 		rm -f $@ && exit 1;\
 	fi
 
@@ -262,6 +275,22 @@ endif
 
 clean-syslinux:
 	@rm -f $(SYSLINUX_CFG) $(ISOLINUX_BIN)
+
+$(GUMMIBOOT_CFG): $(ALL_MODLOOP_DIRSTAMP) $(GUMMIBOOT_ENTRIES)
+	@echo "==> iso: configure gummiboot"
+	@mkdir -p $(dir $@)
+	@echo "default $(KERNEL_FLAVOR_DEFAULT)" >$@
+	@echo "timeout 20" >>$@
+
+$(GUMMIBOOT_ENTRY_DIR)/%.conf:
+	@echo "==> iso: creating gummiboot entry for $*"
+	@mkdir -p $(dir $@)
+	# TODO xen
+	@echo "title $*" >$@
+	@echo "linux /boot/$(call VMLINUZ_NAME,$*)" >>$@
+	@echo "initrd /boot/initramfs-$*" >>$@
+	# TODO refactor duplicate options
+	@echo "options modloop=/boot/modloop-$* modules=loop,squashfs,sd-mod,usb-storage quiet $(BOOT_OPTS)" >>$@
 
 ISO_KERNEL_STAMP	:= $(DESTDIR)/stamp.kernel.%
 ISO_KERNEL	= $(ISO_DIR)/boot/$*
@@ -316,13 +345,15 @@ $(APKOVL_STAMP):
 	fi
 	@touch $@
 
-$(ISOFS_DIRSTAMP): $(ALL_MODLOOP) $(ALL_INITFS) $(ISO_REPOS_DIRSTAMP) $(ISOLINUX_BIN) $(ISOLINUX_C32) $(ALL_ISO_KERNEL) $(APKOVL_STAMP) $(SYSLINUX_CFG) $(APKOVL_DEST)
+$(ISOFS_DIRSTAMP): $(ALL_MODLOOP) $(ALL_INITFS) $(ISO_REPOS_DIRSTAMP) $(ISOLINUX_BIN) $(ISOLINUX_C32) $(GUMMIBOOT_EFI) $(ALL_ISO_KERNEL) $(APKOVL_STAMP) $(SYSLINUX_CFG) $(GUMMIBOOT_CFG) $(APKOVL_DEST)
 	@echo "$(ALPINE_NAME)-$(ALPINE_RELEASE) $(BUILD_DATE)" \
 		> $(ISO_DIR)/.alpine-release
 	@touch $@
 
 $(ISO): $(ISOFS_DIRSTAMP)
 	@echo "==> iso: building $(notdir $(ISO))"
+	# TODO
+	cp $(ISO_DIR)/boot/syslinux/syslinux.cfg $(ISO_DIR)/$(EFI_DIR)/
 	@$(GENISO) -o $(ISO) -l -J -R \
 		-b $(ISOLINUX_DIR)/isolinux.bin \
 		-c $(ISOLINUX_DIR)/boot.cat	\
